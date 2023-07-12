@@ -3,7 +3,10 @@ import numpy as np
 import scipy.stats
 from scipy.stats import norm
 from scipy.optimize import minimize
+
+
 def skewness(r):
+    #Calculates the skewness of a return series or dataframe
     r_1 = r - r.mean()
     sigma_r = r.std()
     exp = (r_1**3).mean()
@@ -11,6 +14,7 @@ def skewness(r):
 
 
 def kurtosis(r):
+    #calculates the kurtosis of a return series/ dataframe
     r_1 = r - r.mean()
     sigma_r = r.std(ddof=0)
     exp = ((r_1)**4).mean()
@@ -19,10 +23,11 @@ def kurtosis(r):
 def compound(r):
     return np.expm1(np.log1p(r).sum())
 
-def annualized_return(df):
+def annualized_return(r):
+    #calculates annual returns given a monthly return series
     annualized_returns = []
-    for column in df.columns:
-        returns = df[column]
+    for column in r.columns:
+        returns = r[column]
         total_returns=1
         for cumm_return in returns:
             total_returns *= (1 + cumm_return)
@@ -31,26 +36,21 @@ def annualized_return(df):
     return annualized_returns
 
 
-def annualize_vol(r, periods_per_year):
-    return r.std()*(periods_per_year**0.5)
+def annualize_vol(r):
+    #calculates annualized volatility given a monthly return series
+    return r.std()*(12**0.5)
 
 
-def sharpe_ratio(r, riskfree_rate, periods_per_year):
-    rf_per_period = (1+riskfree_rate)**(1/periods_per_year)-1
+def sharpe_ratio(r, riskfree_rate=0.03):
+    #calculates the sharpe ratio given a monthly return series and risk free rate as 3 per cent
+    rf_per_period = (1+riskfree_rate)**(1/12)-1
     excess_ret = r - rf_per_period
-    ann_ex_ret = annualize_rets(excess_ret, periods_per_year)
-    ann_vol = annualize_vol(r, periods_per_year)
+    ann_ex_ret = annualized_return(excess_ret)
+    ann_vol = annualize_vol(r)
     return ann_ex_ret/ann_vol
 
-def is_normal(r, level):
-    if isinstance(r, pd.DataFrame):
-        return r.aggregate(is_normal)
-    else:
-        statistic, p_value = scipy.stats.jarque_bera(r)
-        return p_value > level
-
-
 def drawdown(return_series: pd.Series):
+    #output: a dataframe having columns which give drawdown, the wealth index and the maximum return value so far for every month
     wealth_index = 1000*(1+return_series).cumprod()
     previous_peaks = wealth_index.cummax()
     drawdowns = (wealth_index - previous_peaks)/previous_peaks
@@ -60,6 +60,7 @@ def drawdown(return_series: pd.Series):
 
 
 def semideviation(r):
+    #calculates semi-deviation(deviation for negative returns) for a monthly return series
     if isinstance(r, pd.Series):
         is_negative = r < 0
         return r[is_negative].std(ddof=0)
@@ -69,6 +70,9 @@ def semideviation(r):
         raise TypeError("Expected r to be a Series or DataFrame")
 
 def var_gaussian(r, level=5, modified=False):
+    #calculates the Value at risk for a return series and 5% confidence
+    #For normal returns, use modified = False
+    #For returns which are not normal, use modified = True (Cornish Fisher VaR is used)
     z = norm.ppf(level/100)
     if modified:
         s = skewness(r)
@@ -80,14 +84,18 @@ def var_gaussian(r, level=5, modified=False):
             )
     return -(r.mean() + z*r.std(ddof=0))
 
+
 def portfolio_return(weights, returns):
+    #calculates portfolio returns given returns of the assets and their weights
     return weights.T @ returns
 
 
 def portfolio_vol(weights, covmat):
+    #calculates portfolio volatility given covariance of the assets and their weights
     return (weights.T @ covmat @ weights)**0.5
 
 def minimize_vol(target_return, er, cov):
+    #outputs weights for assets to minimize volatility for a particular return rate of the portfolio
     n = er.shape[0]
     init_guess = np.repeat(1/n, n)
     bounds = ((0.0, 1.0),) * n 
@@ -108,6 +116,7 @@ def minimize_vol(target_return, er, cov):
 
 
 def msr(riskfree_rate, er, cov):
+    #outputs weights for a portfolio having maximum sharpe ratio out of all possible portfolios
     n = er.shape[0]
     init_guess = np.repeat(1/n, n)
     bounds = ((0.0, 1.0),) * n 
@@ -133,12 +142,14 @@ def gmv(cov):
 
 
 def optimal_weights(n_points, er, cov):
+    #gives optimal weights for a given return rate
     target_rs = np.linspace(er.min(), er.max(), n_points)
     weights = [minimize_vol(target_return, er, cov) for target_return in target_rs]
     return weights
 
 
 def plot_ef(n_points, er, cov, style='.-', legend=False, show_cml=False, riskfree_rate=0, show_ew=False, show_gmv=False):
+    #Plots the efficient frontier for a given portfolio of assets
     weights = optimal_weights(n_points, er, cov)
     rets = [portfolio_return(w, er) for w in weights]
     vols = [portfolio_vol(w, cov) for w in weights]
@@ -176,10 +187,10 @@ def plot_ef(n_points, er, cov, style='.-', legend=False, show_cml=False, riskfre
 
 
 def run_cppi(risky_r, safe_r=None, m=3, start=1000, floor=0.8, riskfree_rate=0.03, drawdown=None):
-    """
-    Run a backtest of the CPPI strategy, given a set of returns for the risky asset
-    Returns a dictionary containing: Asset Value History, Risk Budget History, Risky Weight History
-    """
+    
+    #Runs a backtest of the CPPI strategy, given a set of returns for the risky asset
+    # Returns a dictionary containing: Asset Value History, Risk Budget History, Risky Weight History
+
     # set up the CPPI parameters
     dates = risky_r.index
     n_steps = len(dates)
@@ -191,7 +202,8 @@ def run_cppi(risky_r, safe_r=None, m=3, start=1000, floor=0.8, riskfree_rate=0.0
 
     if safe_r is None:
         safe_r = pd.DataFrame().reindex_like(risky_r)
-        safe_r.values[:] = riskfree_rate/12 # fast way to set all values to a number
+        safe_r.values[:] = riskfree_rate/12 
+
     # set up some DataFrames for saving intermediate values
     account_history = pd.DataFrame().reindex_like(risky_r)
     risky_w_history = pd.DataFrame().reindex_like(risky_r)
@@ -210,7 +222,7 @@ def run_cppi(risky_r, safe_r=None, m=3, start=1000, floor=0.8, riskfree_rate=0.0
         safe_w = 1-risky_w
         risky_alloc = account_value*risky_w
         safe_alloc = account_value*safe_w
-        # recompute the new account value at the end of this step
+        
         account_value = risky_alloc*(1+risky_r.iloc[step]) + safe_alloc*(1+safe_r.iloc[step])
         # save the histories for analysis and plotting
         cushion_history.iloc[step] = cushion
@@ -234,3 +246,24 @@ def run_cppi(risky_r, safe_r=None, m=3, start=1000, floor=0.8, riskfree_rate=0.0
         "floor": floorval_history
     }
     return backtest_result
+
+
+def summary_stats(r, riskfree_rate=0.03):
+    #Outputs a dataframe with basic analysis for a return series or dataframe
+    ann_r = annualized_return(r)
+    ann_vol = annualize_vol(r)
+    ex_ret = [i - 0.03 for i in ann_r]
+    ann_sr = ex_ret/ann_vol
+    skew = skewness(r)
+    kurt = kurtosis(r)
+    cf_var5 = var_gaussian(r, modified = True)
+
+    return pd.DataFrame({
+        "Annualized Return": ann_r,
+        "Annualized Vol": ann_vol,
+        "Skewness": skew,
+        "Kurtosis": kurt,
+        "Cornish-Fisher VaR (5%)": cf_var5,
+        "Sharpe Ratio": ann_sr,
+        
+    }).reset_index()
